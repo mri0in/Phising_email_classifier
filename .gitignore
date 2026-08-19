@@ -23,3 +23,7 @@ artifacts/
 
 # Logs
 *.log 
+
+# ML Data
+data/raw/
+data/processed/
