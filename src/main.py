@@ -1,16 +1,11 @@
 # src/main.py
 
-"""
-Application entry point for the phishing email classification system.
-
-This module wires the required pipelines into the PipelineOrchestrator
-and provides the command-line entry point for executing them.
-"""
-
 import logging
 
 from src.orchestration.pipeline_orchestrator import PipelineOrchestrator
+from src.pipelines.feature_ppln import FeaturePipeline
 from src.pipelines.preprocessing_ppln import PreprocessingPipeline
+from src.pipelines.training_ppln import TrainingPipeline
 
 
 def configure_logging() -> None:
@@ -23,7 +18,7 @@ def configure_logging() -> None:
 
 
 def main() -> None:
-    """Initialize the application and execute the preprocessing pipeline."""
+    """Application entry point."""
 
     configure_logging()
 
@@ -32,13 +27,29 @@ def main() -> None:
         output_path="data/processed/phishing_emails_processed.csv",
     )
 
+    feature_pipeline = FeaturePipeline(
+        input_path="data/processed/phishing_emails_processed.csv",
+        output_dir="artifacts/features",
+        vectorizer_path="artifacts/models/tfidf_vectorizer.joblib",
+        random_state=42,
+    )
+
+    training_pipeline = TrainingPipeline(
+        features_dir="artifacts/features",
+        model_output_path="artifacts/models/phishing_classifier.joblib",
+        random_state=42,
+    )
+
     orchestrator = PipelineOrchestrator(
         pipelines={
             preprocessing_pipeline.name: preprocessing_pipeline,
+            feature_pipeline.name: feature_pipeline,
+            training_pipeline.name: training_pipeline,
         }
     )
-
-    result = orchestrator.run("preprocessing")
+    ######result = orchestrator.run("preprocessing")
+    ####result = orchestrator.run("features")
+    result = orchestrator.run("training")
 
     print("\nPipeline Result")
     print("----------------")
