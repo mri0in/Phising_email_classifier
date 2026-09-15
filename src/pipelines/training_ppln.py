@@ -22,14 +22,14 @@ from typing import Any
 import joblib
 import numpy as np
 from scipy.sparse import load_npz
-from sklearn.linear_model import LogisticRegression
+from sklearn.base import ClassifierMixin
 from sklearn.metrics import (
     accuracy_score,
     f1_score,
     precision_score,
     recall_score,
 )
-
+from src.models.model_factory import ModelFactory
 from src.orchestration.base_ppln import BasePipeline, PipelineResult
 
 
@@ -48,6 +48,7 @@ class TrainingPipeline(BasePipeline):
         features_dir: str | Path,
         model_output_path: str | Path,
         random_state: int = 42,
+        model_name: str = "logistic_regression",
     ) -> None:
         """
         Initialize the training pipeline.
@@ -79,6 +80,8 @@ class TrainingPipeline(BasePipeline):
         self.features_dir = Path(features_dir)
         self.model_output_path = Path(model_output_path)
         self.random_state = random_state
+        self.model_name = model_name
+        self.model_factory = ModelFactory()
 
     @property
     def name(self) -> str:
@@ -220,23 +223,26 @@ class TrainingPipeline(BasePipeline):
                 "Training data must contain at least two classes."
             )
 
-    def _build_model(self) -> LogisticRegression:
+    def _build_model(self) -> ClassifierMixin:
         """
-        Create the Logistic Regression classifier.
+        Create the configured classification model through ModelFactory.
 
         Returns:
-            LogisticRegression: Configured classifier.
+            ClassifierMixin: An initialized classification model.
         """
 
-        return LogisticRegression(
-            max_iter=1000,
-            random_state=self.random_state,
-            class_weight="balanced",
+        return self.model_factory.create_model(
+            model_name=self.model_name,
+            model_parameters={
+                "max_iter": 1000,
+                "random_state": self.random_state,
+                "class_weight": "balanced",
+            },
         )
-
+    
     def _evaluate(
         self,
-        model: LogisticRegression,
+        model: ClassifierMixin,
         validation_features: Any,
         validation_labels: np.ndarray,
     ) -> dict[str, float]:
@@ -244,7 +250,7 @@ class TrainingPipeline(BasePipeline):
         Evaluate the trained model on validation data.
 
         Args:
-            model: Trained Logistic Regression model.
+            model: Trained classification model.
             validation_features: Validation feature matrix.
             validation_labels: Validation target labels.
 
@@ -292,7 +298,7 @@ class TrainingPipeline(BasePipeline):
 
         return metrics
 
-    def _save_model(self, model: LogisticRegression) -> None:
+    def _save_model(self, model: ClassifierMixin) -> None:
         """
         Persist the trained classifier.
 
@@ -347,11 +353,11 @@ class TrainingPipeline(BasePipeline):
         model = self._build_model()
 
         self.logger.info(
-            "Training Logistic Regression model on %d samples "
-            "with %d features.",
+            "Training '%s' model on %d samples with %d features.",
+            self.model_name,
             training_features.shape[0],
             training_features.shape[1],
-        )
+)
 
         model.fit(
             training_features,
@@ -375,7 +381,7 @@ class TrainingPipeline(BasePipeline):
             success=True,
             message="Model training completed successfully.",
             metadata={
-                "model_type": "LogisticRegression",
+                "model_type": self.model_name,
                 "model_path": str(self.model_output_path),
                 "training_rows": int(training_features.shape[0]),
                 "validation_rows": int(validation_features.shape[0]),
