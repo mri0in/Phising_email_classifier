@@ -29,7 +29,7 @@ from sklearn.metrics import (
     precision_score,
     recall_score,
 )
-from src.models.model_factory import ModelFactory
+from src.models.model_factory import Classifier, ModelFactory
 from src.orchestration.base_ppln import BasePipeline, PipelineResult
 
 
@@ -223,12 +223,12 @@ class TrainingPipeline(BasePipeline):
                 "Training data must contain at least two classes."
             )
 
-    def _build_model(self) -> ClassifierMixin:
+    def _build_model(self) -> Classifier:
         """
         Create the configured classification model through ModelFactory.
 
         Returns:
-            ClassifierMixin: An initialized classification model.
+            Classifier: An initialized classification model.
         """
 
         return self.model_factory.create_model(
@@ -242,7 +242,7 @@ class TrainingPipeline(BasePipeline):
     
     def _evaluate(
         self,
-        model: ClassifierMixin,
+        model: Classifier,
         validation_features: Any,
         validation_labels: np.ndarray,
     ) -> dict[str, float]:
@@ -298,7 +298,7 @@ class TrainingPipeline(BasePipeline):
 
         return metrics
 
-    def _save_model(self, model: ClassifierMixin) -> None:
+    def _save_model(self, model: Classifier) -> None:
         """
         Persist the trained classifier.
 
