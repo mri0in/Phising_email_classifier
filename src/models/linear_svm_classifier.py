@@ -93,13 +93,13 @@ class LinearSVMClassifier:
         if X is None or y is None:
             raise ValueError("Training features X and labels y cannot be None.")
 
-        if len(X) == 0 or len(y) == 0:
+        if X.shape[0] == 0 or len(y) == 0:
             raise ValueError("Training features X and labels y cannot be empty.")
 
-        if len(X) != len(y):
+        if X.shape[0] != len(y):
             raise ValueError(
                 f"X and y must contain the same number of samples. "
-                f"Received X={len(X)}, y={len(y)}."
+                f"Received X={X.shape[0]}, y={len(y)}."
             )
 
         logger.info(
@@ -133,12 +133,12 @@ class LinearSVMClassifier:
         if X is None:
             raise ValueError("Prediction features X cannot be None.")
 
-        if len(X) == 0:
+        if X.shape[0] == 0:
             raise ValueError("Prediction features X cannot be empty.")
 
         logger.debug(
             "Generating predictions for %d samples.",
-            len(X),
+            X.shape[0],
         )
 
         return self.model.predict(X)
@@ -166,12 +166,12 @@ class LinearSVMClassifier:
         if X is None:
             raise ValueError("Prediction features X cannot be None.")
 
-        if len(X) == 0:
+        if X.shape[0] == 0:
             raise ValueError("Prediction features X cannot be empty.")
 
         logger.debug(
             "Generating decision scores for %d samples.",
-            len(X),
+            X.shape[0],
         )
 
         return self.model.decision_function(X)
