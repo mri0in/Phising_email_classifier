@@ -250,6 +250,7 @@ class ModelComparisonRunner:
             "Model comparison results saved successfully."
         )
 
+
     def _build_comparison_row(
         self,
         model_name: str,
@@ -264,12 +265,14 @@ class ModelComparisonRunner:
         Returns:
             Dictionary representing one comparison result row.
         """
+        metrics = metadata.get("validation_metrics",{},)
+
         return {
             "model": model_name,
-            "accuracy": metadata.get("accuracy"),
-            "precision": metadata.get("precision"),
-            "recall": metadata.get("recall"),
-            "f1": metadata.get("f1"),
+            "accuracy": metrics.get("accuracy"),
+            "precision": metrics.get("precision"),
+            "recall": metrics.get("recall"),
+            "f1": metrics.get("f1_score"),
             "training_rows": metadata.get("training_rows"),
             "validation_rows": metadata.get("validation_rows"),
             "feature_count": metadata.get("feature_count"),
@@ -279,7 +282,6 @@ class ModelComparisonRunner:
                 )
             ),
         }
-
     def _validate_inputs(self) -> None:
         """Validate model comparison configuration.
 

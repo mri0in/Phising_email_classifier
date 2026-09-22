@@ -11,3 +11,4 @@ pytest
 fastapi
 uvicorn
 pydantic
+PyYaml
