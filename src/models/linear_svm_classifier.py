@@ -176,6 +176,21 @@ class LinearSVMClassifier:
 
         return self.model.decision_function(X)
 
+
+    @property
+    def classes_(self) -> Any:
+        """
+        Return the class labels learned by the underlying model.
+
+        Returns:
+            Class labels learned during training.
+
+        Raises:
+            RuntimeError: If the classifier has not been fitted.
+        """
+        self._validate_fitted()
+        return self.model.classes_
+
     def _validate_fitted(self) -> None:
         """
         Ensure that the classifier has been trained before inference.
