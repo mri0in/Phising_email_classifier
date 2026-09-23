@@ -10,6 +10,8 @@ The Predictor is intentionally independent of the API and pipeline
 orchestration layers.
 """
 
+from __future__ import annotations
+
 import logging
 from pathlib import Path
 from typing import Any
@@ -28,8 +30,20 @@ class Predictor:
         1. A fitted TF-IDF vectorizer.
         2. A trained classification model.
 
-    It then converts incoming email text into TF-IDF features and generates
-    a classification prediction with an associated confidence score.
+    The loaded model must provide:
+        - predict()
+
+    For prediction confidence information, the model must provide at least
+    one of:
+        - predict_proba()
+        - decision_function()
+
+    Models with predict_proba() return a probability-based confidence
+    value.
+
+    Models without predict_proba(), such as LinearSVC, use their
+    decision_function() output as a decision score. A decision score is
+    not treated as a probability.
     """
 
     def __init__(
@@ -50,7 +64,9 @@ class Predictor:
             FileNotFoundError: If artifacts do not exist.
         """
 
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = logging.getLogger(
+            self.__class__.__name__
+        )
 
         if not isinstance(vectorizer_path, (str, Path)):
             raise TypeError(
@@ -81,7 +97,9 @@ class Predictor:
             self.vectorizer_path
         )
 
-        self.model = joblib.load(self.model_path)
+        self.model = joblib.load(
+            self.model_path
+        )
 
         self._validate_model()
 
@@ -124,7 +142,12 @@ class Predictor:
         """
         Validate that the loaded model exposes the required prediction API.
 
-        The model must provide both `predict` and `predict_proba`.
+        Every supported classifier must provide predict().
+
+        The model must additionally provide at least one confidence
+        mechanism:
+            - predict_proba()
+            - decision_function()
 
         Raises:
             TypeError: If the loaded object is not compatible with the
@@ -136,13 +159,26 @@ class Predictor:
                 "Loaded model does not provide a predict method."
             )
 
-        if not hasattr(self.model, "predict_proba"):
+        has_probability = hasattr(
+            self.model,
+            "predict_proba",
+        )
+
+        has_decision_function = hasattr(
+            self.model,
+            "decision_function",
+        )
+
+        if not has_probability and not has_decision_function:
             raise TypeError(
-                "Loaded model does not provide a predict_proba method."
+                "Loaded model must provide either a predict_proba "
+                "or decision_function method."
             )
 
     @staticmethod
-    def _validate_email_text(email_text: str) -> str:
+    def _validate_email_text(
+        email_text: str,
+    ) -> str:
         """
         Validate and normalize an incoming email message.
 
@@ -150,7 +186,7 @@ class Predictor:
             email_text: Email message to classify.
 
         Returns:
-            str: Cleaned input text with surrounding whitespace removed.
+            Cleaned input text with surrounding whitespace removed.
 
         Raises:
             TypeError: If email_text is not a string.
@@ -171,7 +207,123 @@ class Predictor:
 
         return normalized_text
 
-    def predict(self, email_text: str) -> dict[str, Any]:
+    def _get_probability_confidence(
+        self,
+        features: Any,
+        prediction: Any,
+    ) -> float | None:
+        """
+        Calculate probability-based confidence when supported.
+
+        Args:
+            features: TF-IDF feature representation.
+            prediction: Predicted class.
+
+        Returns:
+            Probability associated with the predicted class, or None when
+            the loaded model does not provide predict_proba().
+        """
+
+        if not hasattr(self.model, "predict_proba"):
+            return None
+
+        probabilities = self.model.predict_proba(
+            features
+        )[0]
+
+        if not hasattr(self.model, "classes_"):
+            raise TypeError(
+                "Loaded model provides predict_proba() but does not "
+                "provide classes_."
+            )
+
+        predicted_class_indices = np.where(
+            self.model.classes_ == prediction
+        )[0]
+
+        if predicted_class_indices.size == 0:
+            raise ValueError(
+                "Predicted class was not found in the model classes."
+            )
+
+        predicted_class_index = int(
+            predicted_class_indices[0]
+        )
+
+        return float(
+            probabilities[predicted_class_index]
+        )
+
+    def _get_decision_score(
+        self,
+        features: Any,
+    ) -> float | None:
+        """
+        Calculate the model decision score when supported.
+
+        Args:
+            features: TF-IDF feature representation.
+
+        Returns:
+            Decision score for binary classification, or None when the
+            loaded model does not provide decision_function().
+
+        Raises:
+            ValueError: If the decision function does not return exactly
+                one binary classification score.
+        """
+
+        if not hasattr(
+            self.model,
+            "decision_function",
+        ):
+            return None
+
+        decision_scores = self.model.decision_function(
+            features
+        )
+
+        decision_scores = np.asarray(
+            decision_scores
+        )
+
+        if decision_scores.ndim == 1:
+            if decision_scores.size != 1:
+                raise ValueError(
+                    "Expected exactly one decision score for a single "
+                    "input email."
+                )
+
+            return float(
+                decision_scores[0]
+            )
+
+        if decision_scores.ndim == 2:
+            if decision_scores.shape[0] != 1:
+                raise ValueError(
+                    "Expected exactly one decision-score row for a "
+                    "single input email."
+                )
+
+            if decision_scores.shape[1] != 1:
+                raise ValueError(
+                    "Expected a single decision score for binary "
+                    "classification."
+                )
+
+            return float(
+                decision_scores[0, 0]
+            )
+
+        raise ValueError(
+            "Unexpected decision_function output shape: "
+            f"{decision_scores.shape}"
+        )
+
+    def predict(
+        self,
+        email_text: str,
+    ) -> dict[str, Any]:
         """
         Predict whether an email is safe or phishing.
 
@@ -181,11 +333,16 @@ class Predictor:
         Returns:
             Dictionary containing:
                 prediction: Human-readable class label.
-                confidence: Probability associated with the prediction.
+                confidence: Probability associated with the prediction
+                    when predict_proba() is supported, otherwise None.
+                decision_score: Decision-function score when
+                    predict_proba() is unavailable.
                 model_version: Current model identifier.
         """
 
-        validated_text = self._validate_email_text(email_text)
+        validated_text = self._validate_email_text(
+            email_text
+        )
 
         # Transform the incoming email using the SAME TF-IDF vectorizer
         # that was fitted exclusively on the training dataset.
@@ -193,18 +350,21 @@ class Predictor:
             [validated_text]
         )
 
-        prediction = self.model.predict(features)[0]
+        prediction = self.model.predict(
+            features
+        )[0]
 
-        probabilities = self.model.predict_proba(features)[0]
-
-        # Find the probability associated with the predicted class.
-        predicted_class_index = np.where(
-            self.model.classes_ == prediction
-        )[0][0]
-
-        confidence = float(
-            probabilities[predicted_class_index]
+        confidence = self._get_probability_confidence(
+            features=features,
+            prediction=prediction,
         )
+
+        decision_score = None
+
+        if confidence is None:
+            decision_score = self._get_decision_score(
+                features
+            )
 
         prediction_label = (
             "phishing"
@@ -212,14 +372,24 @@ class Predictor:
             else "safe"
         )
 
-        self.logger.info(
-            "Email prediction completed: %s | confidence=%.4f",
-            prediction_label,
-            confidence,
-        )
+        if confidence is not None:
+            self.logger.info(
+                "Email prediction completed: %s | "
+                "confidence=%.4f",
+                prediction_label,
+                confidence,
+            )
+        else:
+            self.logger.info(
+                "Email prediction completed: %s | "
+                "decision_score=%.4f",
+                prediction_label,
+                decision_score,
+            )
 
         return {
             "prediction": prediction_label,
             "confidence": confidence,
+            "decision_score": decision_score,
             "model_version": "v1",
         }
