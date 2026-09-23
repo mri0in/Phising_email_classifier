@@ -6,10 +6,11 @@ Model training pipeline for the phishing email classifier.
 This module is responsible for:
     1. Loading persisted training and validation features.
     2. Loading the corresponding target labels.
-    3. Training a Logistic Regression classifier.
-    4. Evaluating the trained model on the validation dataset.
-    5. Persisting the trained classifier.
-    6. Returning a standardized PipelineResult.
+    3. Creating the configured classification model.
+    4. Training the selected classifier.
+    5. Evaluating the trained model on the validation dataset.
+    6. Persisting the trained classifier.
+    7. Returning a standardized PipelineResult.
 
 The test dataset is deliberately not used during this pipeline.
 Final test evaluation will be handled separately.
@@ -22,13 +23,13 @@ from typing import Any
 import joblib
 import numpy as np
 from scipy.sparse import load_npz
-from sklearn.base import ClassifierMixin
 from sklearn.metrics import (
     accuracy_score,
     f1_score,
     precision_score,
     recall_score,
 )
+
 from src.models.model_factory import Classifier, ModelFactory
 from src.orchestration.base_ppln import BasePipeline, PipelineResult
 
@@ -49,6 +50,7 @@ class TrainingPipeline(BasePipeline):
         model_output_path: str | Path,
         random_state: int = 42,
         model_name: str = "logistic_regression",
+        model_parameters: dict[str, Any] | None = None,
     ) -> None:
         """
         Initialize the training pipeline.
@@ -58,10 +60,14 @@ class TrainingPipeline(BasePipeline):
                 and labels.
             model_output_path: Path where the trained model will be saved.
             random_state: Random seed used by the classifier.
+            model_name: Name of the classification model to train.
+            model_parameters: Model-specific hyperparameters loaded from
+                the external configuration.
 
         Raises:
             TypeError: If arguments have invalid types.
-            ValueError: If paths are empty or random_state is invalid.
+            ValueError: If paths are empty, random_state is invalid,
+                or model_parameters are invalid.
         """
 
         self.logger = logging.getLogger(self.__class__.__name__)
@@ -77,10 +83,24 @@ class TrainingPipeline(BasePipeline):
         if not isinstance(random_state, int):
             raise TypeError("random_state must be an integer.")
 
+        if not isinstance(model_name, str) or not model_name.strip():
+            raise ValueError(
+                "model_name must be a non-empty string."
+            )
+
+        if model_parameters is not None and not isinstance(
+            model_parameters,
+            dict,
+        ):
+            raise TypeError(
+                "model_parameters must be a dictionary."
+            )
+
         self.features_dir = Path(features_dir)
         self.model_output_path = Path(model_output_path)
         self.random_state = random_state
         self.model_name = model_name
+        self.model_parameters = model_parameters or {}
         self.model_factory = ModelFactory()
 
     @property
@@ -227,19 +247,28 @@ class TrainingPipeline(BasePipeline):
         """
         Create the configured classification model through ModelFactory.
 
+        Model-specific hyperparameters are supplied externally through
+        the configuration rather than being hardcoded in this pipeline.
+
         Returns:
             Classifier: An initialized classification model.
         """
 
+        model_parameters = dict(self.model_parameters)
+
+        model_parameters["random_state"] = self.random_state
+
+        self.logger.info(
+            "Creating '%s' model with configured parameters: %s",
+            self.model_name,
+            model_parameters,
+        )
+
         return self.model_factory.create_model(
             model_name=self.model_name,
-            model_parameters={
-                "max_iter": 1000,
-                "random_state": self.random_state,
-                "class_weight": "balanced",
-            },
+            model_parameters=model_parameters,
         )
-    
+
     def _evaluate(
         self,
         model: Classifier,
@@ -357,7 +386,7 @@ class TrainingPipeline(BasePipeline):
             self.model_name,
             training_features.shape[0],
             training_features.shape[1],
-)
+        )
 
         model.fit(
             training_features,

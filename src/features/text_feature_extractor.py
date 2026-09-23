@@ -7,14 +7,16 @@ This module provides a reusable component for converting email text
 into numerical TF-IDF feature representations.
 
 Responsibilities:
+    - Validate TF-IDF configuration.
     - Validate text input.
     - Fit a TF-IDF vectorizer on training text.
     - Transform text using the fitted vectorizer.
     - Fit and transform training text when required.
     - Persist and load the fitted vectorizer.
 
-The component does not decide how data is split or when the model
-should be trained. Those responsibilities belong to the pipeline layer.
+The component does not read configuration files directly. Configuration
+values are supplied by the pipeline layer so that this component remains
+independent of YAML and deployment-specific configuration.
 """
 
 import logging
@@ -37,10 +39,10 @@ class TextFeatureExtractor:
 
     def __init__(
         self,
-        max_features: int = 10_000,
-        ngram_range: tuple[int, int] = (1, 2),
-        min_df: int = 2,
-        max_df: float = 0.95,
+        max_features: int,
+        ngram_range: tuple[int, int] | list[int],
+        min_df: int,
+        max_df: float,
     ) -> None:
         """
         Initialize the text feature extractor.
@@ -62,16 +64,35 @@ class TextFeatureExtractor:
         if max_features <= 0:
             raise ValueError("max_features must be greater than zero.")
 
-        if (
-            not isinstance(ngram_range, tuple)
-            or len(ngram_range) != 2
-            or not all(isinstance(value, int) for value in ngram_range)
-        ):
+        if not isinstance(ngram_range, (tuple, list)):
             raise TypeError(
-                "ngram_range must be a tuple containing two integers."
+                "ngram_range must be a tuple or list containing "
+                "two integers."
             )
 
-        if ngram_range[0] <= 0 or ngram_range[1] < ngram_range[0]:
+        if len(ngram_range) != 2:
+            raise ValueError(
+                "ngram_range must contain exactly two values."
+            )
+
+        if not all(
+            isinstance(value, int)
+            for value in ngram_range
+        ):
+            raise TypeError(
+                "ngram_range values must be integers."
+            )
+
+        normalized_ngram_range = (
+            int(ngram_range[0]),
+            int(ngram_range[1]),
+        )
+
+        if (
+            normalized_ngram_range[0] <= 0
+            or normalized_ngram_range[1]
+            < normalized_ngram_range[0]
+        ):
             raise ValueError(
                 "ngram_range must contain valid positive boundaries."
             )
@@ -82,17 +103,25 @@ class TextFeatureExtractor:
         if min_df <= 0:
             raise ValueError("min_df must be greater than zero.")
 
-        if not isinstance(max_df, float):
-            raise TypeError("max_df must be a float.")
+        if not isinstance(max_df, (int, float)):
+            raise TypeError(
+                "max_df must be a numeric value."
+            )
+
+        max_df = float(max_df)
 
         if not 0.0 < max_df <= 1.0:
-            raise ValueError("max_df must be between 0 and 1.")
+            raise ValueError(
+                "max_df must be between 0 and 1."
+            )
 
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = logging.getLogger(
+            self.__class__.__name__
+        )
 
         self.vectorizer = TfidfVectorizer(
             max_features=max_features,
-            ngram_range=ngram_range,
+            ngram_range=normalized_ngram_range,
             min_df=min_df,
             max_df=max_df,
         )
@@ -128,7 +157,9 @@ class TextFeatureExtractor:
             ) from exc
 
         if not documents:
-            raise ValueError("At least one text document is required.")
+            raise ValueError(
+                "At least one text document is required."
+            )
 
         validated_documents: list[str] = []
 
@@ -177,7 +208,10 @@ class TextFeatureExtractor:
             len(self.vectorizer.vocabulary_),
         )
 
-    def transform(self, texts: Iterable[str]) -> csr_matrix:
+    def transform(
+        self,
+        texts: Iterable[str],
+    ) -> csr_matrix:
         """
         Transform text using the fitted TF-IDF vectorizer.
 
@@ -245,7 +279,10 @@ class TextFeatureExtractor:
 
         return features
 
-    def save(self, output_path: str | Path) -> None:
+    def save(
+        self,
+        output_path: str | Path,
+    ) -> None:
         """
         Save the fitted TF-IDF vectorizer to disk.
 
@@ -271,7 +308,9 @@ class TextFeatureExtractor:
         output_path = Path(output_path)
 
         if not str(output_path).strip():
-            raise ValueError("output_path cannot be empty.")
+            raise ValueError(
+                "output_path cannot be empty."
+            )
 
         output_path.parent.mkdir(
             parents=True,
@@ -289,7 +328,10 @@ class TextFeatureExtractor:
         )
 
     @classmethod
-    def load(cls, input_path: str | Path) -> "TextFeatureExtractor":
+    def load(
+        cls,
+        input_path: str | Path,
+    ) -> "TextFeatureExtractor":
         """
         Load a previously fitted TF-IDF vectorizer.
 
@@ -313,7 +355,9 @@ class TextFeatureExtractor:
         input_path = Path(input_path)
 
         if not str(input_path).strip():
-            raise ValueError("input_path cannot be empty.")
+            raise ValueError(
+                "input_path cannot be empty."
+            )
 
         if not input_path.exists():
             raise FileNotFoundError(
@@ -325,9 +369,24 @@ class TextFeatureExtractor:
                 f"TF-IDF vectorizer path is not a file: {input_path}"
             )
 
-        extractor = cls()
+        vectorizer = joblib.load(input_path)
 
-        extractor.vectorizer = joblib.load(input_path)
+        if not isinstance(
+            vectorizer,
+            TfidfVectorizer,
+        ):
+            raise TypeError(
+                "Loaded artifact is not a TfidfVectorizer."
+            )
+
+        extractor = cls(
+            max_features=vectorizer.max_features,
+            ngram_range=vectorizer.ngram_range,
+            min_df=vectorizer.min_df,
+            max_df=vectorizer.max_df,
+        )
+
+        extractor.vectorizer = vectorizer
         extractor._is_fitted = True
 
         extractor.logger.info(

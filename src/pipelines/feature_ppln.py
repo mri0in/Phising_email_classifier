@@ -13,10 +13,16 @@ This module is responsible for:
 
 The pipeline does not train a machine learning model.
 Model training is handled separately by TrainingPipeline.
+
+Feature extraction and dataset split parameters are supplied by the
+application configuration layer.
 """
+
+from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Any
 
 import joblib
 import pandas as pd
@@ -43,6 +49,8 @@ class FeaturePipeline(BasePipeline):
         output_dir: str | Path,
         vectorizer_path: str | Path,
         random_state: int = 42,
+        tfidf_config: dict[str, Any] | None = None,
+        split_config: dict[str, Any] | None = None,
     ) -> None:
         """
         Initialize the feature engineering pipeline.
@@ -52,10 +60,13 @@ class FeaturePipeline(BasePipeline):
             output_dir: Directory where feature matrices and labels are saved.
             vectorizer_path: Path where the fitted text vectorizer is saved.
             random_state: Seed used for reproducible dataset splitting.
+            tfidf_config: Configuration for TF-IDF feature extraction.
+            split_config: Configuration for train/validation/test splitting.
 
         Raises:
             TypeError: If arguments have invalid types.
-            ValueError: If paths are empty or random_state is invalid.
+            ValueError: If paths, random_state, or configuration values
+                are invalid.
         """
 
         self.logger = logging.getLogger(self.__class__.__name__)
@@ -67,15 +78,45 @@ class FeaturePipeline(BasePipeline):
             raise TypeError("output_dir must be a string or Path.")
 
         if not isinstance(vectorizer_path, (str, Path)):
-            raise TypeError("vectorizer_path must be a string or Path.")
+            raise TypeError(
+                "vectorizer_path must be a string or Path."
+            )
 
         if not isinstance(random_state, int):
             raise TypeError("random_state must be an integer.")
+
+        if tfidf_config is None:
+            raise ValueError(
+                "tfidf_config must be provided."
+            )
+
+        if not isinstance(tfidf_config, dict):
+            raise TypeError(
+                "tfidf_config must be a dictionary."
+            )
+
+        if split_config is None:
+            raise ValueError(
+                "split_config must be provided."
+            )
+
+        if not isinstance(split_config, dict):
+            raise TypeError(
+                "split_config must be a dictionary."
+            )
 
         self.input_path = Path(input_path)
         self.output_dir = Path(output_dir)
         self.vectorizer_path = Path(vectorizer_path)
         self.random_state = random_state
+
+        self.tfidf_config = self._validate_tfidf_config(
+            tfidf_config
+        )
+
+        self.split_config = self._validate_split_config(
+            split_config
+        )
 
     @property
     def name(self) -> str:
@@ -87,6 +128,110 @@ class FeaturePipeline(BasePipeline):
         """
 
         return self.PIPELINE_NAME
+
+    @staticmethod
+    def _validate_tfidf_config(
+        tfidf_config: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        Validate the TF-IDF configuration required by TextFeatureExtractor.
+
+        Args:
+            tfidf_config: TF-IDF configuration mapping.
+
+        Returns:
+            dict[str, Any]: Validated TF-IDF configuration.
+
+        Raises:
+            ValueError: If required configuration values are missing.
+        """
+
+        required_parameters = (
+            "max_features",
+            "ngram_range",
+            "min_df",
+            "max_df",
+        )
+
+        missing_parameters = [
+            parameter
+            for parameter in required_parameters
+            if parameter not in tfidf_config
+        ]
+
+        if missing_parameters:
+            raise ValueError(
+                "Missing required TF-IDF configuration parameter(s): "
+                f"{missing_parameters}"
+            )
+
+        return dict(tfidf_config)
+
+    @staticmethod
+    def _validate_split_config(
+        split_config: dict[str, Any],
+    ) -> dict[str, float]:
+        """
+        Validate the final train/validation/test split proportions.
+
+        Args:
+            split_config: Dataset split configuration.
+
+        Returns:
+            dict[str, float]: Validated split proportions.
+
+        Raises:
+            ValueError: If required values are missing, invalid, or do not
+                sum to one.
+            TypeError: If split values are not numeric.
+        """
+
+        required_sizes = (
+            "train_size",
+            "validation_size",
+            "test_size",
+        )
+
+        missing_sizes = [
+            size
+            for size in required_sizes
+            if size not in split_config
+        ]
+
+        if missing_sizes:
+            raise ValueError(
+                "Missing required split configuration value(s): "
+                f"{missing_sizes}"
+            )
+
+        sizes: dict[str, float] = {}
+
+        for size_name in required_sizes:
+            value = split_config[size_name]
+
+            if not isinstance(value, (int, float)):
+                raise TypeError(
+                    f"{size_name} must be a numeric value."
+                )
+
+            value = float(value)
+
+            if not 0.0 < value < 1.0:
+                raise ValueError(
+                    f"{size_name} must be greater than 0 and less than 1."
+                )
+
+            sizes[size_name] = value
+
+        total = sum(sizes.values())
+
+        if abs(total - 1.0) > 1e-9:
+            raise ValueError(
+                "train_size, validation_size, and test_size "
+                f"must sum to 1.0. Received {total:.6f}."
+            )
+
+        return sizes
 
     def _load_data(self) -> pd.DataFrame:
         """
@@ -138,7 +283,9 @@ class FeaturePipeline(BasePipeline):
         """
 
         if not isinstance(dataframe, pd.DataFrame):
-            raise TypeError("dataframe must be a pandas DataFrame.")
+            raise TypeError(
+                "dataframe must be a pandas DataFrame."
+            )
 
         required_columns = {"Email Text", "label"}
         missing_columns = required_columns - set(dataframe.columns)
@@ -150,7 +297,9 @@ class FeaturePipeline(BasePipeline):
             )
 
         if dataframe.empty:
-            raise ValueError("Processed dataset is empty.")
+            raise ValueError(
+                "Processed dataset is empty."
+            )
 
     def _split_data(
         self,
@@ -169,10 +318,7 @@ class FeaturePipeline(BasePipeline):
         The split is stratified using the target label so that class
         proportions remain approximately consistent across all datasets.
 
-        Split ratio:
-            Training   = 70%
-            Validation = 15%
-            Test       = 15%
+        The final proportions are controlled by split configuration.
 
         Args:
             dataframe: Validated processed dataset.
@@ -190,9 +336,14 @@ class FeaturePipeline(BasePipeline):
         texts = dataframe["Email Text"]
         labels = dataframe["label"]
 
-        # First split:
-        # 70% training
-        # 30% temporary set
+        train_size = self.split_config["train_size"]
+        validation_size = self.split_config["validation_size"]
+        test_size = self.split_config["test_size"]
+
+        # The first split separates the configured training proportion
+        # from the combined validation + test proportion.
+        temporary_size = validation_size + test_size
+
         (
             training_texts,
             temporary_texts,
@@ -201,15 +352,15 @@ class FeaturePipeline(BasePipeline):
         ) = train_test_split(
             texts,
             labels,
-            test_size=0.30,
+            test_size=temporary_size,
             random_state=self.random_state,
             stratify=labels,
         )
 
-        # Second split:
-        # Split the 30% temporary set equally:
-        # 15% validation
-        # 15% test
+        # The second split divides the temporary dataset according to
+        # the relative proportions of validation and test data.
+        test_relative_size = test_size / temporary_size
+
         (
             validation_texts,
             test_texts,
@@ -218,16 +369,20 @@ class FeaturePipeline(BasePipeline):
         ) = train_test_split(
             temporary_texts,
             temporary_labels,
-            test_size=0.50,
+            test_size=test_relative_size,
             random_state=self.random_state,
             stratify=temporary_labels,
         )
 
         self.logger.info(
-            "Dataset split completed: train=%d, validation=%d, test=%d.",
+            "Dataset split completed: train=%d (%.2f%%), "
+            "validation=%d (%.2f%%), test=%d (%.2f%%).",
             len(training_texts),
+            train_size * 100,
             len(validation_texts),
+            validation_size * 100,
             len(test_texts),
+            test_size * 100,
         )
 
         return (
@@ -263,7 +418,10 @@ class FeaturePipeline(BasePipeline):
             test_labels: Test target labels.
         """
 
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.output_dir.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
 
         save_npz(
             self.output_dir / "X_train.npz",
@@ -311,7 +469,9 @@ class FeaturePipeline(BasePipeline):
             RuntimeError: If feature engineering fails.
         """
 
-        self.logger.info("Starting feature engineering pipeline.")
+        self.logger.info(
+            "Starting feature engineering pipeline."
+        )
 
         dataframe = self._load_data()
         self._validate_schema(dataframe)
@@ -325,18 +485,32 @@ class FeaturePipeline(BasePipeline):
             test_labels,
         ) = self._split_data(dataframe)
 
-        extractor = TextFeatureExtractor()
+        extractor = TextFeatureExtractor(
+            max_features=self.tfidf_config["max_features"],
+            ngram_range=self.tfidf_config["ngram_range"],
+            min_df=self.tfidf_config["min_df"],
+            max_df=self.tfidf_config["max_df"],
+        )
 
         # IMPORTANT:
         # TF-IDF is fitted ONLY on training text.
-        training_features = extractor.fit_transform(training_texts)
+        training_features = extractor.fit_transform(
+            training_texts
+        )
 
         # Validation and test data are transformed using the already-fitted
         # training vectorizer. No fitting occurs on either dataset.
-        validation_features = extractor.transform(validation_texts)
-        test_features = extractor.transform(test_texts)
+        validation_features = extractor.transform(
+            validation_texts
+        )
 
-        extractor.save(self.vectorizer_path)
+        test_features = extractor.transform(
+            test_texts
+        )
+
+        extractor.save(
+            self.vectorizer_path
+        )
 
         self._save_features(
             training_features=training_features,
@@ -363,5 +537,7 @@ class FeaturePipeline(BasePipeline):
                 "validation_rows": len(validation_texts),
                 "test_rows": len(test_texts),
                 "feature_count": training_features.shape[1],
+                "split_config": self.split_config,
+                "tfidf_config": self.tfidf_config,
             },
         )

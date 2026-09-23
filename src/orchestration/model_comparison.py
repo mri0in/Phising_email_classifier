@@ -53,6 +53,7 @@ class ModelComparisonRunner:
         metrics_output_path: str | Path,
         random_state: int = 42,
         models: tuple[str, ...] | None = None,
+        model_configs: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         """Initialize the model comparison runner.
 
@@ -64,10 +65,14 @@ class ModelComparisonRunner:
             random_state: Random seed used for reproducible training.
             models: Optional tuple containing model names to compare.
                 If omitted, all supported models are compared.
+            model_configs: Mapping containing model-specific training
+                parameters loaded from external configuration.
 
         Raises:
             ValueError: If no models are configured.
+            TypeError: If model_configs has an invalid type.
         """
+
         self.logger = logging.getLogger(self.__class__.__name__)
 
         self.features_dir = Path(features_dir)
@@ -80,6 +85,16 @@ class ModelComparisonRunner:
             raise ValueError(
                 "At least one model must be provided for comparison."
             )
+
+        if model_configs is not None and not isinstance(
+            model_configs,
+            dict,
+        ):
+            raise TypeError(
+                "model_configs must be a dictionary."
+            )
+
+        self.model_configs = model_configs or {}
 
         self.output_dir.mkdir(
             parents=True,
@@ -99,9 +114,11 @@ class ModelComparisonRunner:
 
         Raises:
             FileNotFoundError: If the feature directory does not exist.
-            ValueError: If an unsupported model is configured.
+            ValueError: If an unsupported model is configured or a model
+                configuration is missing.
             RuntimeError: If model training or comparison persistence fails.
         """
+
         self._validate_inputs()
 
         comparison_results: dict[str, dict[str, Any]] = {}
@@ -172,7 +189,17 @@ class ModelComparisonRunner:
 
         Returns:
             Configured TrainingPipeline instance.
+
+        Raises:
+            ValueError: If model-specific configuration is missing.
         """
+
+        if model_name not in self.model_configs:
+            raise ValueError(
+                f"Training configuration is missing for model: "
+                f"'{model_name}'."
+            )
+
         model_output_path = self._build_model_output_path(
             model_name=model_name,
         )
@@ -182,6 +209,7 @@ class ModelComparisonRunner:
             model_output_path=model_output_path,
             random_state=self.random_state,
             model_name=model_name,
+            model_parameters=self.model_configs[model_name],
         )
 
     def _build_model_output_path(
@@ -196,6 +224,7 @@ class ModelComparisonRunner:
         Returns:
             Path for the serialized model artifact.
         """
+
         return self.output_dir / (
             f"phishing_classifier_{model_name}.joblib"
         )
@@ -212,6 +241,7 @@ class ModelComparisonRunner:
         Raises:
             RuntimeError: If the CSV cannot be written.
         """
+
         self.logger.info(
             "Saving model comparison results to: %s",
             self.metrics_output_path,
@@ -250,7 +280,6 @@ class ModelComparisonRunner:
             "Model comparison results saved successfully."
         )
 
-
     def _build_comparison_row(
         self,
         model_name: str,
@@ -265,7 +294,8 @@ class ModelComparisonRunner:
         Returns:
             Dictionary representing one comparison result row.
         """
-        metrics = metadata.get("validation_metrics",{},)
+
+        metrics = metadata.get("validation_metrics", {})
 
         return {
             "model": model_name,
@@ -282,14 +312,16 @@ class ModelComparisonRunner:
                 )
             ),
         }
+
     def _validate_inputs(self) -> None:
         """Validate model comparison configuration.
 
         Raises:
             FileNotFoundError: If the feature directory does not exist.
-            ValueError: If the feature path is invalid or a model is
-                unsupported.
+            ValueError: If the feature path is invalid, a model is
+                unsupported, or model configuration is missing.
         """
+
         if not self.features_dir.exists():
             raise FileNotFoundError(
                 f"Feature directory does not exist: {self.features_dir}"
@@ -308,4 +340,16 @@ class ModelComparisonRunner:
             raise ValueError(
                 f"Unsupported model(s): {sorted(invalid_models)}. "
                 f"Supported models: {sorted(supported_models)}"
+            )
+
+        missing_configs = [
+            model_name
+            for model_name in self.models
+            if model_name not in self.model_configs
+        ]
+
+        if missing_configs:
+            raise ValueError(
+                "Training configuration is missing for model(s): "
+                f"{missing_configs}"
             )
