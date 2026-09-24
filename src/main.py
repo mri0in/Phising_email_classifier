@@ -154,10 +154,12 @@ def build_pipelines(
     )
 
     feature_pipeline = FeaturePipeline(
-        input_path=paths["processed_data"],
-        output_dir=paths["features_dir"],
-        vectorizer_path=paths["vectorizer"],
-        random_state=random_state,
+    input_path=paths["processed_data"],
+    output_dir=paths["features_dir"],
+    vectorizer_path=paths["vectorizer"],
+    random_state=random_state,
+    tfidf_config=config["features"]["tfidf"],
+    split_config=config["features"]["split"],
     )
 
     training_pipeline = TrainingPipeline(
@@ -247,12 +249,14 @@ def run_model_comparison(
 
     paths = config["paths"]
     random_state = config["application"]["random_state"]
+    model_configs = config["training"]["models"]
 
     comparison_runner = ModelComparisonRunner(
         features_dir=paths["features_dir"],
         output_dir=paths["model_comparison"],
         metrics_output_path=paths["model_comparison_metrics"],
         random_state=random_state,
+        model_configs=model_configs,
     )
 
     comparison_results = comparison_runner.run()
@@ -272,7 +276,6 @@ def run_model_comparison(
         "Comparison results saved to: %s",
         paths["model_comparison_metrics"],
     )
-
 
 def select_model_for_inference(
     config: dict[str, Any],
