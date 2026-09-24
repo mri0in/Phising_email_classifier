@@ -167,6 +167,8 @@ def build_pipelines(
         model_output_path=paths["selected_model"],
         random_state=random_state,
         model_name=model_name,
+        model_parameters=config["training"]["models"][model_name],
+        mlflow_config=config["mlflow"],
     )
 
     inference_model = (

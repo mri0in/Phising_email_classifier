@@ -19,6 +19,7 @@ Final test evaluation will be handled separately.
 import logging
 from pathlib import Path
 from typing import Any
+import time
 
 import joblib
 import numpy as np
@@ -32,6 +33,7 @@ from sklearn.metrics import (
 
 from src.models.model_factory import Classifier, ModelFactory
 from src.orchestration.base_ppln import BasePipeline, PipelineResult
+from src.tracking.mlflow_tracker import MLflowTracker
 
 
 class TrainingPipeline(BasePipeline):
@@ -51,6 +53,7 @@ class TrainingPipeline(BasePipeline):
         random_state: int = 42,
         model_name: str = "logistic_regression",
         model_parameters: dict[str, Any] | None = None,
+        mlflow_config: dict[str, Any] | None = None,
     ) -> None:
         """
         Initialize the training pipeline.
@@ -96,12 +99,31 @@ class TrainingPipeline(BasePipeline):
                 "model_parameters must be a dictionary."
             )
 
+        if mlflow_config is not None and not isinstance(
+            mlflow_config,
+            dict,
+        ):
+            raise TypeError(
+                "mlflow_config must be a dictionary."
+            )
+
+        
         self.features_dir = Path(features_dir)
         self.model_output_path = Path(model_output_path)
         self.random_state = random_state
         self.model_name = model_name
         self.model_parameters = model_parameters or {}
         self.model_factory = ModelFactory()
+        self.mlflow_config = mlflow_config or {}
+        self.mlflow_tracker: MLflowTracker | None = None
+        self.mlflow_run_id: str | None = None
+
+        if self.mlflow_config.get("enabled", False):
+
+            self.mlflow_tracker = MLflowTracker(
+            experiment_name=self.mlflow_config["experiment_name"],
+            tracking_uri=self.mlflow_config.get("tracking_uri"),
+        )
 
     @property
     def name(self) -> str:
@@ -363,58 +385,137 @@ class TrainingPipeline(BasePipeline):
 
         self.logger.info("Starting model training pipeline.")
 
-        self._validate_feature_files()
+        run_started = False
+        run_status = "FINISHED"
+        run_start_time = time.perf_counter()
 
-        (
-            training_features,
-            training_labels,
-            validation_features,
-            validation_labels,
-        ) = self._load_training_data()
+        try:
+            # --------------------------------------------------------
+            # MLflow: Start a new tracking run.
+            # --------------------------------------------------------
 
-        self._validate_data(
-            training_features=training_features,
-            training_labels=training_labels,
-            validation_features=validation_features,
-            validation_labels=validation_labels,
-        )
+            if self.mlflow_tracker is not None:
+                active_run = self.mlflow_tracker.start_run(
+                    run_name=self.model_name
+                )
 
-        model = self._build_model()
+                self.mlflow_run_id = active_run.info.run_id
+                run_started = True
 
-        self.logger.info(
-            "Training '%s' model on %d samples with %d features.",
-            self.model_name,
-            training_features.shape[0],
-            training_features.shape[1],
-        )
+                self.mlflow_tracker.log_parameters(
+                    {
+                        "model_name": self.model_name,
+                        "random_state": self.random_state,
+                        **self.model_parameters,
+                    }
+                )
 
-        model.fit(
-            training_features,
-            training_labels,
-        )
+                self.mlflow_tracker.set_tags(
+                    {
+                        "pipeline": self.name,
+                        "model": self.model_name,
+                    }
+                )
 
-        self.logger.info(
-            "Model training completed successfully."
-        )
+            self._validate_feature_files()
+            (
+                training_features,
+                training_labels,
+                validation_features,
+                validation_labels,
+            ) = self._load_training_data()
 
-        validation_metrics = self._evaluate(
-            model=model,
-            validation_features=validation_features,
-            validation_labels=validation_labels,
-        )
+            self._validate_data(
+                training_features=training_features,
+                training_labels=training_labels,
+                validation_features=validation_features,
+                validation_labels=validation_labels,
+            )
 
-        self._save_model(model)
+            model = self._build_model()
 
-        return PipelineResult(
-            pipeline_name=self.name,
-            success=True,
-            message="Model training completed successfully.",
-            metadata={
-                "model_type": self.model_name,
-                "model_path": str(self.model_output_path),
-                "training_rows": int(training_features.shape[0]),
-                "validation_rows": int(validation_features.shape[0]),
-                "feature_count": int(training_features.shape[1]),
-                "validation_metrics": validation_metrics,
-            },
-        )
+            self.logger.info(
+                "Training '%s' model on %d samples with %d features.",
+                self.model_name,
+                training_features.shape[0],
+                training_features.shape[1],
+            )
+
+            model.fit(
+                training_features,
+                training_labels,
+            )
+
+            self.logger.info(
+                "Model training completed successfully."
+            )
+
+            validation_metrics = self._evaluate(
+                model=model,
+                validation_features=validation_features,
+                validation_labels=validation_labels,
+            )
+
+            # --------------------------------------------------------
+            # MLflow: Log validation metrics.
+            # --------------------------------------------------------
+
+            if self.mlflow_tracker is not None:
+                self.mlflow_tracker.log_metrics(
+                    {
+                        "validation_accuracy": validation_metrics["accuracy"],
+                        "validation_precision": validation_metrics["precision"],
+                        "validation_recall": validation_metrics["recall"],
+                        "validation_f1_score": validation_metrics["f1_score"],
+                    }
+                )
+
+            self._save_model(model)
+
+            # --------------------------------------------------------
+            # MLflow: Log the trained model as an artifact.
+            # --------------------------------------------------------
+
+            if self.mlflow_tracker is not None:
+                self.mlflow_tracker.log_artifact(
+                    self.model_output_path
+                )
+
+            return PipelineResult(
+                pipeline_name=self.name,
+                success=True,
+                message="Model training completed successfully.",
+                metadata={
+                    "model_type": self.model_name,
+                    "model_path": str(self.model_output_path),
+                    "training_rows": int(training_features.shape[0]),
+                    "validation_rows": int(validation_features.shape[0]),
+                    "feature_count": int(training_features.shape[1]),
+                    "validation_metrics": validation_metrics,
+                    "mlflow_run_id": self.mlflow_run_id,
+                },
+            )
+
+        except Exception:
+            run_status = "FAILED"
+            self.logger.exception(
+                "Model training pipeline failed."
+            )
+            raise
+
+        # --------------------------------------------------------
+        # MLflow: Always close the active run.
+        # --------------------------------------------------------
+        finally:
+            if run_started and self.mlflow_tracker is not None:
+                run_duration = time.perf_counter() - run_start_time
+
+                self.mlflow_tracker.log_metrics(
+                    {
+                        "run_duration_seconds": run_duration,
+                    }
+                )
+
+                self.mlflow_tracker.end_run(
+                    status=run_status
+                )

@@ -104,3 +104,12 @@ model_selection:
   enabled: true
   metric: f1
   direction: maximize
+
+# ============================================================
+# MLFLOW CONFIGURATION
+# ============================================================
+
+mlflow:
+  enabled: true
+  experiment_name: phishing_email_detection
+  tracking_uri: null

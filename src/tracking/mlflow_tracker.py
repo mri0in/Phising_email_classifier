@@ -87,18 +87,15 @@ class MLflowTracker:
             mlflow.get_tracking_uri(),
         )
 
-    def start_run(
-        self,
-        run_name: str | None = None,
-    ) -> Any:
+    def start_run(self, run_name: str | None = None) -> Any:
         """
-        Start an MLflow tracking run.
+        Start a new MLflow run.
 
         Args:
             run_name: Optional human-readable name for the run.
 
         Returns:
-            Active MLflow run context.
+            The active MLflow Run object.
         """
 
         self.logger.info(
@@ -106,10 +103,18 @@ class MLflowTracker:
             run_name,
         )
 
-        return mlflow.start_run(
-            run_name=run_name,
+        active_run = mlflow.start_run(
+            run_name=run_name
         )
 
+        self.logger.info(
+            "MLflow run started | run_id=%s | run_name=%s",
+            active_run.info.run_id,
+            run_name,
+        )
+
+        return active_run
+    
     def log_parameters(
         self,
         parameters: dict[str, Any],
@@ -142,6 +147,33 @@ class MLflowTracker:
         self.logger.info(
             "Logged %d parameters to MLflow.",
             len(normalized_parameters),
+        )
+
+
+    def set_tags(self, tags: dict[str, Any]) -> None:
+        """
+        Set descriptive tags for the active MLflow run.
+
+        Args:
+            tags: Mapping of tag names to tag values.
+
+        Raises:
+            TypeError: If tags is not a dictionary.
+        """
+
+        if not isinstance(tags, dict):
+            raise TypeError("tags must be a dictionary.")
+
+        normalized_tags = {
+            str(key): str(value)
+            for key, value in tags.items()
+        }
+
+        mlflow.set_tags(normalized_tags)
+
+        self.logger.info(
+            "Logged %d tags to MLflow.",
+            len(normalized_tags),
         )
 
     def log_metrics(
@@ -255,9 +287,13 @@ class MLflowTracker:
             artifact_directory,
         )
 
-    def end_run(self) -> None:
+    def end_run(self, status: str = "FINISHED") -> None:
         """
-        End the currently active MLflow run.
+        End the active MLflow run.
+
+        Args:
+            status: Final MLflow run status.
+                    Typically 'FINISHED' or 'FAILED'.
         """
 
         active_run = mlflow.active_run()
@@ -270,13 +306,14 @@ class MLflowTracker:
 
         run_id = active_run.info.run_id
 
-        mlflow.end_run()
+        mlflow.end_run(status=status)
 
         self.logger.info(
-            "MLflow run ended | run_id=%s",
+            "MLflow run ended | run_id=%s | status=%s",
             run_id,
+            status,
         )
-
+        
     @staticmethod
     def _normalize_parameter_value(
         value: Any,
