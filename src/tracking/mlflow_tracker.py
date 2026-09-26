@@ -23,6 +23,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+import joblib
 import mlflow
 
 
@@ -286,6 +287,200 @@ class MLflowTracker:
             "Logged MLflow artifact directory: %s",
             artifact_directory,
         )
+
+
+    def log_and_register_model(
+        self,
+        model: Any,
+        registered_model_name: str,
+    ) -> str:
+        """
+        Log a scikit-learn model to the active MLflow run and register it.
+
+        Args:
+            model: Trained scikit-learn estimator.
+            registered_model_name: Name of the MLflow Registered Model.
+
+        Returns:
+            str: Version assigned to the registered model.
+
+        Raises:
+            TypeError: If model is None or registered_model_name is not a string.
+            ValueError: If registered_model_name is empty.
+            RuntimeError: If no MLflow run is currently active.
+        """
+        if model is None:
+            raise TypeError("model cannot be None.")
+
+        if not isinstance(registered_model_name, str):
+            raise TypeError(
+                "registered_model_name must be a string."
+            )
+
+        registered_model_name = registered_model_name.strip()
+
+        if not registered_model_name:
+            raise ValueError(
+                "registered_model_name cannot be empty."
+            )
+
+        active_run = mlflow.active_run()
+
+        if active_run is None:
+            raise RuntimeError(
+                "An active MLflow run is required to log and "
+                "register a model."
+            )
+
+        self.logger.info(
+            "Logging and registering model | "
+            "registered_model=%s | run_id=%s",
+            registered_model_name,
+            active_run.info.run_id,
+        )
+
+        model_info = mlflow.sklearn.log_model(
+            sk_model=model,
+            name="model",
+            registered_model_name=registered_model_name,
+        )
+
+        model_version = getattr(
+            model_info,
+            "registered_model_version",
+            None,
+        )
+
+        if model_version is None:
+            raise RuntimeError(
+                "MLflow logged the model, but no registered model "
+                "version was returned."
+            )
+
+        self.logger.info(
+            "Model registered successfully | "
+            "registered_model=%s | version=%s",
+            registered_model_name,
+            model_version,
+        )
+
+        return str(model_version)
+
+    def register_model_artifact(
+    self,
+    artifact_path: str | Path,
+    registered_model_name: str,
+    metadata: dict[str, Any] | None = None,
+    ) -> str:
+        """
+        Load a persisted model artifact and register its underlying
+        scikit-learn estimator with MLflow.
+
+        A dedicated MLflow run is created for the registration operation
+        so that model selection and model registration remain independently
+        traceable.
+
+        Args:
+            artifact_path: Path to the persisted model artifact.
+            registered_model_name: MLflow Registered Model name.
+            metadata: Optional metadata describing the model selection.
+
+        Returns:
+            The registered MLflow model version.
+
+        Raises:
+            ValueError: If required arguments are invalid.
+            FileNotFoundError: If the model artifact does not exist.
+            TypeError: If the persisted artifact does not expose an
+                underlying estimator through the ``model`` attribute.
+            RuntimeError: If no MLflow run can be created.
+        """
+
+        if not artifact_path:
+            raise ValueError(
+                "artifact_path must be provided."
+            )
+
+        if not isinstance(registered_model_name, str):
+            raise TypeError(
+                "registered_model_name must be a string."
+            )
+
+        if not registered_model_name.strip():
+            raise ValueError(
+                "registered_model_name must not be empty."
+            )
+
+        model_path = Path(artifact_path)
+
+        if not model_path.is_file():
+            raise FileNotFoundError(
+                f"Model artifact does not exist: {model_path}"
+            )
+
+        model = joblib.load(model_path)
+
+        if not hasattr(model, "model"):
+            raise TypeError(
+                "Persisted model artifact does not expose an "
+                "underlying estimator through the 'model' attribute."
+            )
+
+        selected_model_name = None
+
+        if metadata is not None:
+            if not isinstance(metadata, dict):
+                raise TypeError(
+                    "metadata must be a dictionary when provided."
+                )
+
+            selected_model_name = metadata.get(
+                "selected_model"
+            )
+
+        run_name = (
+            f"register_{selected_model_name}"
+            if selected_model_name
+            else "register_model"
+        )
+
+        active_run = self.start_run(
+            run_name=run_name,
+        )
+
+        try:
+            if metadata:
+                self.log_parameters(metadata)
+
+            self.set_tags(
+                {
+                    "pipeline": "model_registration",
+                    "operation": "register_selected_model",
+                }
+            )
+
+            self.log_artifact(model_path)
+
+            registered_version = self.log_and_register_model(
+                model=model.model,
+                registered_model_name=registered_model_name,
+            )
+
+            self.logger.info(
+                "Model artifact registered | "
+                "artifact=%s | registered_model=%s | version=%s",
+                model_path,
+                registered_model_name,
+                registered_version,
+            )
+
+            self.end_run()
+
+            return registered_version
+
+        except Exception:
+            self.end_run(status="FAILED")
+            raise
 
     def end_run(self, status: str = "FINISHED") -> None:
         """

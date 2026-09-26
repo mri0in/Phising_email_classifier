@@ -112,4 +112,5 @@ model_selection:
 mlflow:
   enabled: true
   experiment_name: phishing_email_detection
+  registered_model_name: phishing_detection_registered_model
   tracking_uri: null

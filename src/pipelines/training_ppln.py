@@ -54,6 +54,7 @@ class TrainingPipeline(BasePipeline):
         model_name: str = "logistic_regression",
         model_parameters: dict[str, Any] | None = None,
         mlflow_config: dict[str, Any] | None = None,
+        register_model: bool = False,
     ) -> None:
         """
         Initialize the training pipeline.
@@ -115,8 +116,10 @@ class TrainingPipeline(BasePipeline):
         self.model_parameters = model_parameters or {}
         self.model_factory = ModelFactory()
         self.mlflow_config = mlflow_config or {}
+        self.register_model = register_model
         self.mlflow_tracker: MLflowTracker | None = None
         self.mlflow_run_id: str | None = None
+        self.mlflow_model_version: str | None = None
 
         if self.mlflow_config.get("enabled", False):
 
@@ -478,9 +481,31 @@ class TrainingPipeline(BasePipeline):
 
             if self.mlflow_tracker is not None:
                 self.mlflow_tracker.log_artifact(
-                    self.model_output_path
+                    self.model_output_path,
                 )
 
+                # ----------------------------------------------------
+                # MLflow: Register the underlying scikit-learn model.
+                # ----------------------------------------------------
+
+                if self.register_model:
+                    registered_model_name = self.mlflow_config.get(
+                        "registered_model_name"
+                    )
+
+                    if not registered_model_name:
+                        raise ValueError(
+                            "MLflow registered_model_name must be configured "
+                            "when register_model=True."
+                        )
+
+                    self.mlflow_model_version = (
+                        self.mlflow_tracker.log_and_register_model(
+                            model=model.model,
+                            registered_model_name=registered_model_name,
+                        )
+                    )
+                    
             return PipelineResult(
                 pipeline_name=self.name,
                 success=True,
@@ -493,6 +518,7 @@ class TrainingPipeline(BasePipeline):
                     "feature_count": int(training_features.shape[1]),
                     "validation_metrics": validation_metrics,
                     "mlflow_run_id": self.mlflow_run_id,
+                    "mlflow_model_version": self.mlflow_model_version,
                 },
             )
 

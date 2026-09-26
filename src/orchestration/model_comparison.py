@@ -215,6 +215,7 @@ class ModelComparisonRunner:
             model_name=model_name,
             model_parameters=self.model_configs[model_name],
             mlflow_config=self.mlflow_config,
+            register_model=False,
         )
 
     def _build_model_output_path(

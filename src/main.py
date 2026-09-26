@@ -7,6 +7,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
+import joblib
 import yaml
 
 from src.orchestration.best_model_selection import BestModelSelection
@@ -17,6 +18,7 @@ from src.pipelines.feature_ppln import FeaturePipeline
 from src.pipelines.inference_ppln import InferencePipeline
 from src.pipelines.preprocessing_ppln import PreprocessingPipeline
 from src.pipelines.training_ppln import TrainingPipeline
+from src.tracking.mlflow_tracker import MLflowTracker
 
 
 logger = logging.getLogger(__name__)
@@ -264,6 +266,29 @@ def run_model_comparison(
 
     comparison_results = comparison_runner.run()
 
+    best_model_selector = BestModelSelection(
+        selection_config=config["model_selection"],
+        comparison_results_path=paths["model_comparison_metrics"],
+    )
+
+    selection_result = best_model_selector.select()
+
+    mlflow_tracker = MLflowTracker(
+        experiment_name=config["mlflow"]["experiment_name"],
+        tracking_uri=config["mlflow"].get("tracking_uri"),
+    )
+
+    registered_version = mlflow_tracker.register_model_artifact(
+        artifact_path=selection_result["model_artifact"],
+        registered_model_name=config["mlflow"]["registered_model_name"],
+        metadata={
+            "selected_model": selection_result["model"],
+            "selection_metric": selection_result["metric"],
+            "selection_direction": selection_result["direction"],
+            "selection_score": selection_result["score"],
+        },
+    )
+
     print("\nModel Comparison Result")
     print("-----------------------")
 
@@ -278,6 +303,12 @@ def run_model_comparison(
     logger.info(
         "Comparison results saved to: %s",
         paths["model_comparison_metrics"],
+    )
+
+    logger.info(
+        "Selected model registered | model=%s | version=%s",
+        selection_result["model"],
+        registered_version,
     )
 
 def select_model_for_inference(
