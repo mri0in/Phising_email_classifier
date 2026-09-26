@@ -44,6 +44,7 @@ class ModelComparisonRunner:
         "validation_rows",
         "feature_count",
         "model_artifact",
+        "mlflow_run_id",
     )
 
     def __init__(
@@ -54,6 +55,7 @@ class ModelComparisonRunner:
         random_state: int = 42,
         models: tuple[str, ...] | None = None,
         model_configs: dict[str, dict[str, Any]] | None = None,
+        mlflow_config: dict[str, Any] | None = None,
     ) -> None:
         """Initialize the model comparison runner.
 
@@ -67,6 +69,7 @@ class ModelComparisonRunner:
                 If omitted, all supported models are compared.
             model_configs: Mapping containing model-specific training
                 parameters loaded from external configuration.
+            mlflow_config: Mapping containing MLflow tracking configuration.
 
         Raises:
             ValueError: If no models are configured.
@@ -80,6 +83,7 @@ class ModelComparisonRunner:
         self.metrics_output_path = Path(metrics_output_path)
         self.random_state = random_state
         self.models = models or self.DEFAULT_MODELS
+        self.mlflow_config = mlflow_config or {}
 
         if not self.models:
             raise ValueError(
@@ -210,6 +214,7 @@ class ModelComparisonRunner:
             random_state=self.random_state,
             model_name=model_name,
             model_parameters=self.model_configs[model_name],
+            mlflow_config=self.mlflow_config,
         )
 
     def _build_model_output_path(
@@ -306,6 +311,7 @@ class ModelComparisonRunner:
             "training_rows": metadata.get("training_rows"),
             "validation_rows": metadata.get("validation_rows"),
             "feature_count": metadata.get("feature_count"),
+            "mlflow_run_id": metadata.get("mlflow_run_id"),
             "model_artifact": str(
                 self._build_model_output_path(
                     model_name=model_name,

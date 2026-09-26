@@ -259,6 +259,7 @@ def run_model_comparison(
         metrics_output_path=paths["model_comparison_metrics"],
         random_state=random_state,
         model_configs=model_configs,
+        mlflow_config=config["mlflow"],
     )
 
     comparison_results = comparison_runner.run()

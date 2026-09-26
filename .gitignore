@@ -27,3 +27,7 @@ artifacts/
 # ML Data
 data/raw/
 data/processed/
+
+# MLflow
+mlflow.db
+mlruns/
