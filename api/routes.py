@@ -147,6 +147,7 @@ class APIRoutes:
             return PredictionResponse(
                 prediction=prediction["prediction"],
                 confidence=prediction["confidence"],
+                decision_score=prediction["decision_score"],
                 model_version=prediction["model_version"],
             )
 
