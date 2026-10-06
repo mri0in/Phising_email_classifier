@@ -36,11 +36,22 @@ class PredictionResponse(BaseModel):
         description="Classification result: safe or phishing.",
     )
 
-    confidence: float = Field(
-        ...,
+    confidence: float | None = Field(
+        default=None,
         ge=0.0,
         le=1.0,
-        description="Model confidence for the predicted class.",
+        description=(
+            "Model probability for the predicted class, when supported "
+            "by the classifier."
+        ),
+    )
+
+    decision_score: float | None = Field(
+        default=None,
+        description=(
+            "Raw decision score returned by classifiers that do not "
+            "provide probability estimates."
+        ),
     )
 
     model_version: str = Field(
