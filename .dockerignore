@@ -1,0 +1,56 @@
+# Python virtual environment
+.venv/
+venv/
+env/
+
+# Git
+.git/
+.gitignore
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Tests
+tests/
+.pytest_cache/
+
+# Training and dataset files
+data/
+
+# MLflow
+mlruns/
+mlflow.db
+
+# Development notebooks and notes
+notebooks/
+notes/
+
+# Development dependencies
+requirements.txt
+requirements-test.txt
+
+# Local environment/configuration files
+.env
+.env.*
+
+# IDE/editor files
+.vscode/
+.idea/
+
+# OS-generated files
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-compose.yml
+docker-compose.yaml
+
+# Build/cache files
+*.log
+*.tmp
+*.temp
