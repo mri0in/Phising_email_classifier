@@ -1,0 +1,123 @@
+
+# .github/workflows/deploy.yml
+name: Build and Deploy Phishing Email Classifier
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: phishing-api-deployment
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    name: Build, Push and Deploy
+    runs-on: ubuntu-latest
+
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+      EC2_INSTANCE_ID: ${{ vars.EC2_INSTANCE_ID }}
+      AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+      IMAGE_TAG: ${{ github.sha }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials using OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ env.IMAGE_TAG }}
+            ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest
+
+      - name: Deploy container through Systems Manager
+        shell: bash
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          set -euo pipefail
+
+          # Construct the remote shell commands as valid JSON.
+          PARAMETERS=$(jq -n \
+            --arg region "$AWS_REGION" \
+            --arg registry "$ECR_REGISTRY" \
+            --arg repository "$ECR_REPOSITORY" \
+            --arg tag "$IMAGE_TAG" \
+            '{
+              commands: [
+                "set -e",
+                ("aws ecr get-login-password --region " + $region + " | docker login --username AWS --password-stdin " + $registry),
+                ("docker pull " + $registry + "/" + $repository + ":" + $tag),
+                "docker rm -f phishing-detection-api || true",
+                ("docker run -d --name phishing-detection-api --restart unless-stopped -p 8000:8000 " + $registry + "/" + $repository + ":" + $tag),
+                "docker image prune -f"
+              ]
+            }')
+
+          # Send the deployment command only to our designated EC2 instance.
+          COMMAND_ID=$(aws ssm send-command \
+            --document-name "AWS-RunShellScript" \
+            --instance-ids "$EC2_INSTANCE_ID" \
+            --comment "Deploy phishing classifier image $IMAGE_TAG" \
+            --parameters "$PARAMETERS" \
+            --query "Command.CommandId" \
+            --output text)
+
+          echo "SSM command ID: $COMMAND_ID"
+
+          # Wait for deployment to finish, up to approximately 5 minutes.
+          for attempt in $(seq 1 30); do
+            STATUS=$(aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" \
+              --instance-id "$EC2_INSTANCE_ID" \
+              --query "Status" \
+              --output text 2>/dev/null || echo "Pending")
+
+            echo "Deployment status: $STATUS"
+
+            if [ "$STATUS" = "Success" ]; then
+              echo "Deployment completed successfully."
+              exit 0
+            fi
+
+            if [[ "$STATUS" == "Failed" ||
+                  "$STATUS" == "TimedOut" ||
+                  "$STATUS" == "Cancelled" ]]; then
+              echo "Deployment failed. Remote output:"
+              aws ssm get-command-invocation \
+                --command-id "$COMMAND_ID" \
+                --instance-id "$EC2_INSTANCE_ID" \
+                --query '{Status:Status,Stdout:StandardOutputContent,Stderr:StandardErrorContent}' \
+                --output json || true
+              exit 1
+            fi
+
+            sleep 10
+          done
+
+          echo "Timed out waiting for the deployment command."
+          exit 1
