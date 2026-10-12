@@ -40,7 +40,7 @@ jobs:
           echo "Tracked inference artifacts:"
           git ls-files artifacts/models
           echo "Docker ignore files:"
-          find . -name .dockerignore -o -name Dockerfile
+          find . \( -name .dockerignore -o -name Dockerfile \)
           
       - name: Configure AWS credentials using OIDC
         uses: aws-actions/configure-aws-credentials@v4
