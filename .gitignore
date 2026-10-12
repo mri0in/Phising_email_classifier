@@ -19,7 +19,14 @@ __pycache__/
 Thumbs.db
 
 # ML Artifacts
-artifacts/
+artifacts/*
+
+# Include only the artifacts required for API inference
+!artifacts/models/
+artifacts/models/*
+!artifacts/models/phishing_classifier.joblib
+!artifacts/models/tfidf_vectorizer.joblib
+
 
 # Logs
 *.log 
