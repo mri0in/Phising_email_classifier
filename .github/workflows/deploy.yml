@@ -31,7 +31,17 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
-
+        
+      - name: Verify Docker build inputs
+        run: |
+          echo "Workspace: $GITHUB_WORKSPACE"
+          echo "Model directory:"
+          ls -la artifacts/models || true
+          echo "Tracked inference artifacts:"
+          git ls-files artifacts/models
+          echo "Docker ignore files:"
+          find . -name .dockerignore -o -name Dockerfile
+          
       - name: Configure AWS credentials using OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
