@@ -4,16 +4,22 @@
 API routes for phishing email classification.
 
 This module defines the HTTP endpoints exposed by the application.
-It contains API-layer logic only and delegates machine-learning
+It handles request validation and delegates machine-learning
 inference to the existing inference pipeline.
 """
 
+import json
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import ValidationError
 
-from api.schemas import HealthResponse, PredictionRequest, PredictionResponse
+from api.schemas import (
+    HealthResponse,
+    PredictionRequest,
+    PredictionResponse,
+)
 from src.pipelines.inference_ppln import InferencePipeline
 
 
@@ -21,8 +27,8 @@ class APIRoutes:
     """
     Encapsulates the application's API routes.
 
-    The class is responsible for connecting HTTP requests to the
-    existing inference pipeline without implementing ML logic itself.
+    Supports JSON requests and raw plain-text email submissions
+    without modifying the underlying inference pipeline.
     """
 
     def __init__(
@@ -77,12 +83,37 @@ class APIRoutes:
             self.predict,
             methods=["POST"],
             response_model=PredictionResponse,
+            openapi_extra={
+                "requestBody": {
+                    "required": True,
+                    "content": {
+                        "application/json": {
+                            "schema": PredictionRequest.model_json_schema(),
+                            "example": {
+                                "email_text": (
+                                    "URGENT: Your account has been suspended. "
+                                    "Click here to verify your account."
+                                )
+                            },
+                        },
+                        "text/plain": {
+                            "schema": {
+                                "type": "string",
+                                "title": "Raw Email Text",
+                            },
+                            "example": (
+                                "Subject: Payroll Verification\n\n"
+                                "Dear Employee,\n\n"
+                                "Please verify your payroll details."
+                            ),
+                        },
+                    },
+                }
+            },
         )
 
     async def root(self) -> dict[str, str]:
-        """
-        Return basic API information.
-        """
+        """Return basic API information."""
 
         return {
             "service": "Phishing Email Classifier API",
@@ -90,14 +121,10 @@ class APIRoutes:
         }
 
     async def health(self) -> HealthResponse:
-        """
-        Return API and model health status.
-        """
+        """Return API and model artifact availability."""
 
         model_loaded = (
-            self.vectorizer_path.exists()
-            and self.vectorizer_path.is_file()
-            and self.model_path.exists()
+            self.vectorizer_path.is_file()
             and self.model_path.is_file()
         )
 
@@ -108,29 +135,76 @@ class APIRoutes:
 
     async def predict(
         self,
-        request: PredictionRequest,
+        http_request: Request,
     ) -> PredictionResponse:
         """
-        Classify an email using the existing inference pipeline.
+        Classify an email submitted as JSON or plain text.
 
-        Args:
-            request: Validated prediction request.
-
-        Returns:
-            PredictionResponse containing the prediction,
-            confidence, and model version.
-
-        Raises:
-            HTTPException: If inference fails.
+        JSON requests use the PredictionRequest schema.
+        Plain-text requests contain the raw email, including newlines.
         """
 
         self.logger.info("Received email classification request.")
 
         try:
+            content_type = (
+                http_request.headers.get("content-type", "")
+                .split(";", maxsplit=1)[0]
+                .strip()
+                .lower()
+            )
+
+            if content_type == "application/json":
+                try:
+                    payload = await http_request.json()
+                    request_data = PredictionRequest.model_validate(
+                        payload
+                    )
+                except (
+                    json.JSONDecodeError,
+                    ValidationError,
+                    ValueError,
+                ) as exc:
+                    raise HTTPException(
+                        status_code=422,
+                        detail=(
+                            "Invalid JSON request. "
+                            "Expected a non-empty email_text field."
+                        ),
+                    ) from exc
+
+                email_text = request_data.email_text
+
+            elif content_type == "text/plain":
+                try:
+                    email_text = (
+                        await http_request.body()
+                    ).decode("utf-8")
+                except UnicodeDecodeError as exc:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Request body must contain valid UTF-8 text.",
+                    ) from exc
+
+            else:
+                raise HTTPException(
+                    status_code=415,
+                    detail=(
+                        "Unsupported Content-Type. "
+                        "Use application/json or text/plain."
+                    ),
+                )
+
+            if not email_text.strip():
+                raise HTTPException(
+                    status_code=422,
+                    detail="Email text cannot be empty.",
+                )
+
             inference_pipeline = InferencePipeline(
                 vectorizer_path=self.vectorizer_path,
                 model_path=self.model_path,
-                email_text=request.email_text,
+                email_text=email_text,
             )
 
             result = inference_pipeline.run()
@@ -150,6 +224,9 @@ class APIRoutes:
                 decision_score=prediction["decision_score"],
                 model_version=prediction["model_version"],
             )
+
+        except HTTPException:
+            raise
 
         except Exception as exc:
             self.logger.exception(

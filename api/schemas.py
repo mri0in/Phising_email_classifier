@@ -27,13 +27,12 @@ class PredictionRequest(BaseModel):
 
 
 class PredictionResponse(BaseModel):
-    """
-    Response returned after classifying an email.
-    """
+    """Response schema for phishing email classification."""
 
     prediction: str = Field(
         ...,
-        description="Classification result: safe or phishing.",
+        description="Predicted email class: phishing or safe.",
+        examples=["phishing"],
     )
 
     confidence: float | None = Field(
@@ -41,22 +40,25 @@ class PredictionResponse(BaseModel):
         ge=0.0,
         le=1.0,
         description=(
-            "Model probability for the predicted class, when supported "
-            "by the classifier."
+            "Calibrated prediction probability, if available. "
+            "Currently null because the Linear SVM is not calibrated."
         ),
+        examples=[None],
     )
 
     decision_score: float | None = Field(
         default=None,
         description=(
-            "Raw decision score returned by classifiers that do not "
-            "provide probability estimates."
+            "Raw SVM decision margin. This is not a probability "
+            "and should not be interpreted as confidence."
         ),
+        examples=[1.5113],
     )
 
     model_version: str = Field(
         ...,
-        description="Version identifier of the deployed model.",
+        description="Version identifier of the model used for inference.",
+        examples=["v1"],
     )
 
 
